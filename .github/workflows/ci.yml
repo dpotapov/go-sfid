@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.x'
+          cache: false
+      - run: go test -race ./...
+
+  bench-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.x'
+          cache: true
+          cache-dependency-path: benchmarks/go.sum
+      - run: go test -run=^$ -bench=. -benchmem -benchtime=500ms ./...
+      - run: go test -run=^$ -bench=. -benchmem -benchtime=500ms ./...
+        working-directory: benchmarks
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.x'
+          cache: false
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.11.3
