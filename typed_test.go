@@ -1,6 +1,8 @@
 package sfid
 
 import (
+	"database/sql"
+	"database/sql/driver"
 	"encoding"
 	"encoding/json"
 	"errors"
@@ -29,6 +31,8 @@ var (
 	_ encoding.TextUnmarshaler = (*AccountID)(nil)
 	_ json.Marshaler           = AccountID(0)
 	_ json.Unmarshaler         = (*AccountID)(nil)
+	_ driver.Valuer            = UserID(0)
+	_ sql.Scanner              = (*UserID)(nil)
 )
 
 func TestWrapTypedString(t *testing.T) {

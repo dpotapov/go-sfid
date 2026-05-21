@@ -1,9 +1,16 @@
 package sfid
 
 import (
+	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"slices"
 	"testing"
+)
+
+var (
+	_ driver.Valuer = ID(0)
+	_ sql.Scanner   = (*ID)(nil)
 )
 
 func TestZeroIDVector(t *testing.T) {

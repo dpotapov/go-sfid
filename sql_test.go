@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/binary"
 	"errors"
 	"io"
+	"math"
 	"sync"
 	"testing"
 )
@@ -13,7 +15,7 @@ import (
 type sqlHarnessState struct {
 	mu       sync.Mutex
 	execArgs []driver.NamedValue
-	queryVal int64
+	queryVal any
 }
 
 type sqlHarnessDriver struct{}
@@ -21,7 +23,7 @@ type sqlHarnessDriver struct{}
 type sqlHarnessConn struct{}
 
 type sqlHarnessRows struct {
-	value int64
+	value any
 	done  bool
 }
 
@@ -135,7 +137,7 @@ func TestIDDatabaseSQLExecAndScan(t *testing.T) {
 	db, state := openSQLHarness(t)
 	id := MustParse("d000000000000")
 
-	if _, err := db.ExecContext(context.Background(), "insert", id); err != nil {
+	if _, err := db.ExecContext(t.Context(), "insert", id); err != nil {
 		t.Fatalf("ExecContext() error = %v", err)
 	}
 
@@ -160,7 +162,7 @@ func TestIDDatabaseSQLExecAndScan(t *testing.T) {
 	state.mu.Unlock()
 
 	var scanned ID
-	if err := db.QueryRowContext(context.Background(), "select").Scan(&scanned); err != nil {
+	if err := db.QueryRowContext(t.Context(), "select").Scan(&scanned); err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
 
@@ -173,7 +175,7 @@ func TestTypedAliasDatabaseSQLExecAndScan(t *testing.T) {
 	db, state := openSQLHarness(t)
 	uid := UserID(MustParse("d000000000000"))
 
-	if _, err := db.ExecContext(context.Background(), "insert", uid); err != nil {
+	if _, err := db.ExecContext(t.Context(), "insert", uid); err != nil {
 		t.Fatalf("ExecContext() error = %v", err)
 	}
 
@@ -198,11 +200,236 @@ func TestTypedAliasDatabaseSQLExecAndScan(t *testing.T) {
 	state.mu.Unlock()
 
 	var scanned UserID
-	if err := db.QueryRowContext(context.Background(), "select").Scan(&scanned); err != nil {
+	if err := db.QueryRowContext(t.Context(), "select").Scan(&scanned); err != nil {
 		t.Fatalf("Scan() error = %v", err)
 	}
 
 	if scanned != uid {
 		t.Fatalf("scanned UserID = %v, want %v", scanned, uid)
+	}
+}
+
+func TestIDValue(t *testing.T) {
+	t.Helper()
+
+	id := MustParse("d000000000000")
+
+	got, err := id.Value()
+	if err != nil {
+		t.Fatalf("Value() error = %v", err)
+	}
+	if gotInt, ok := got.(int64); !ok || gotInt != int64(id) {
+		t.Fatalf("Value() = %v (%T), want int64(%d)", got, got, int64(id))
+	}
+
+	var zero ID
+	got, err = zero.Value()
+	if err != nil {
+		t.Fatalf("Value() on zero error = %v", err)
+	}
+	if got != nil {
+		t.Fatalf("Value() on zero = %v, want nil", got)
+	}
+}
+
+func TestTypedValue(t *testing.T) {
+	t.Helper()
+
+	uid := UserID(MustParse("d000000000000"))
+
+	got, err := uid.Value()
+	if err != nil {
+		t.Fatalf("Value() error = %v", err)
+	}
+	if gotInt, ok := got.(int64); !ok || gotInt != int64(uid) {
+		t.Fatalf("Value() = %v (%T), want int64(%d)", got, got, int64(uid))
+	}
+
+	var zero UserID
+	got, err = zero.Value()
+	if err != nil {
+		t.Fatalf("Value() on zero error = %v", err)
+	}
+	if got != nil {
+		t.Fatalf("Value() on zero = %v, want nil", got)
+	}
+}
+
+func TestIDScan(t *testing.T) {
+	want := MustParse("d000000000000")
+	be := make([]byte, 8)
+	binary.BigEndian.PutUint64(be, uint64(want))
+	small := ID(42)
+
+	tests := []struct {
+		name    string
+		src     any
+		want    ID
+		wantErr error
+	}{
+		{name: "nil", src: nil, want: 0},
+		{name: "int64", src: int64(want), want: want},
+		{name: "int", src: int(want), want: want},
+		{name: "int32", src: int32(small), want: small},
+		{name: "uint64", src: uint64(want), want: want},
+		{name: "string", src: "d000000000000", want: want},
+		{name: "empty string", src: "", want: 0},
+		{name: "bytes big-endian", src: be, want: want},
+		{name: "bytes string", src: []byte("d000000000000"), want: want},
+		{name: "bytes overflow", src: func() []byte {
+			b := make([]byte, 8)
+			binary.BigEndian.PutUint64(b, uint64(math.MaxInt64)+1)
+			return b
+		}(), wantErr: ErrInvalidScanValue},
+		{name: "negative int64", src: int64(-1), wantErr: ErrInvalidScanValue},
+		{name: "uint64 overflow", src: uint64(math.MaxInt64) + 1, wantErr: ErrInvalidScanValue},
+		{name: "float64", src: float64(1), wantErr: ErrInvalidScanSource},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var got ID
+			err := got.Scan(tc.src)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("Scan() error = %v, want %v", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Scan() error = %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("Scan() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTypedScan(t *testing.T) {
+	want := UserID(MustParse("d000000000000"))
+	be := make([]byte, 8)
+	binary.BigEndian.PutUint64(be, uint64(want))
+	small := UserID(42)
+
+	tests := []struct {
+		name    string
+		src     any
+		want    UserID
+		wantErr error
+	}{
+		{name: "nil", src: nil, want: 0},
+		{name: "int64", src: int64(want), want: want},
+		{name: "int", src: int(want), want: want},
+		{name: "int32", src: int32(small), want: small},
+		{name: "uint64", src: uint64(want), want: want},
+		{name: "prefixed string", src: "u_d000000000000", want: want},
+		{name: "empty string", src: "", want: 0},
+		{name: "bytes big-endian", src: be, want: want},
+		{name: "bytes prefixed string", src: []byte("u_d000000000000"), want: want},
+		{name: "wrong prefix", src: "org_d000000000000", wantErr: ErrTypedPrefixMismatch},
+		{name: "negative int64", src: int64(-1), wantErr: ErrInvalidScanValue},
+		{name: "uint64 overflow", src: uint64(math.MaxInt64) + 1, wantErr: ErrInvalidScanValue},
+		{name: "float64", src: float64(1), wantErr: ErrInvalidScanSource},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var got UserID
+			err := got.Scan(tc.src)
+			if tc.wantErr != nil {
+				if !errors.Is(err, tc.wantErr) {
+					t.Fatalf("Scan() error = %v, want %v", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("Scan() error = %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("Scan() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIDDatabaseSQLScanSources(t *testing.T) {
+	want := MustParse("d000000000000")
+	be := make([]byte, 8)
+	binary.BigEndian.PutUint64(be, uint64(want))
+
+	tests := []struct {
+		name  string
+		query any
+	}{
+		{name: "int64", query: int64(want)},
+		{name: "string", query: "d000000000000"},
+		{name: "bytes", query: be},
+		{name: "nil", query: nil},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			db, state := openSQLHarness(t)
+
+			state.mu.Lock()
+			state.queryVal = tc.query
+			state.mu.Unlock()
+
+			var scanned ID
+			if err := db.QueryRowContext(t.Context(), "select").Scan(&scanned); err != nil {
+				t.Fatalf("Scan() error = %v", err)
+			}
+
+			if tc.query == nil {
+				if scanned != 0 {
+					t.Fatalf("scanned ID = %v, want zero", scanned)
+				}
+				return
+			}
+
+			if scanned != want {
+				t.Fatalf("scanned ID = %v, want %v", scanned, want)
+			}
+		})
+	}
+}
+
+func TestTypedDatabaseSQLScanSources(t *testing.T) {
+	want := UserID(MustParse("d000000000000"))
+
+	tests := []struct {
+		name  string
+		query any
+	}{
+		{name: "int64", query: int64(want)},
+		{name: "prefixed string", query: "u_d000000000000"},
+		{name: "nil", query: nil},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			db, state := openSQLHarness(t)
+
+			state.mu.Lock()
+			state.queryVal = tc.query
+			state.mu.Unlock()
+
+			var scanned UserID
+			if err := db.QueryRowContext(t.Context(), "select").Scan(&scanned); err != nil {
+				t.Fatalf("Scan() error = %v", err)
+			}
+
+			if tc.query == nil {
+				if scanned != 0 {
+					t.Fatalf("scanned UserID = %v, want zero", scanned)
+				}
+				return
+			}
+
+			if scanned != want {
+				t.Fatalf("scanned UserID = %v, want %v", scanned, want)
+			}
+		})
 	}
 }

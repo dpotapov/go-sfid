@@ -23,4 +23,10 @@ var (
 
 	// ErrTypedPrefixMismatch reports a mismatch between a typed string prefix and its target type.
 	ErrTypedPrefixMismatch = errors.New("sfid: typed prefix mismatch")
+
+	// ErrInvalidScanSource reports an unsupported database/sql scan source type.
+	ErrInvalidScanSource = errors.New("sfid: invalid scan source")
+
+	// ErrInvalidScanValue reports a numeric scan source outside the valid ID range.
+	ErrInvalidScanValue = errors.New("sfid: invalid scan value")
 )

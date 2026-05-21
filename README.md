@@ -375,6 +375,27 @@ slog.Info("operation started",
 
 If a log processor sees a token like `u_d30bnjf5ak010`, it can parse it as a typed user ID, use the `u_` prefix as a type hint, and attach additional context such as the user's name or email after a lookup.
 
+### Database usage
+
+`sfid.ID` and `sfid.Typed[T]` implement `driver.Valuer` and `sql.Scanner`. The natural SQL storage form is a 64-bit integer (`BIGINT` in PostgreSQL). Use PostgreSQL `BIGINT`, not `INTEGER` — sfid values exceed the int4 range.
+
+```go
+g := sfid.MustNewGenerator(42, 'd')
+uid := sfid.NewTyped[user](g)
+
+db.Exec(`INSERT INTO users (id) VALUES ($1)`, uid) // sends int64
+
+var read sfid.Typed[user]
+db.QueryRow(`SELECT id FROM users WHERE id = $1`, uid).Scan(&read)
+
+// TEXT column read (wire form) also works:
+db.QueryRow(`SELECT id FROM users WHERE name = $1`, "alice").Scan(&read)
+```
+
+`Value()` stores non-zero IDs as `int64` and zero as SQL `NULL`. `Scan()` accepts `nil`, numeric types, canonical sfid strings, and 8-byte big-endian blobs.
+
+To store prefixed wire strings in a `TEXT` column on write, pass `uid.String()` explicitly.
+
 ## Lowercase-only parsing
 
 `sfid` is intentionally strict:
